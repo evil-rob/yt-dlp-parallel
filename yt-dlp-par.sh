@@ -1,18 +1,21 @@
 #!/bin/sh
 
+yt_command="/usr/bin/yt-dlp"
+
 trap 'echo "Ctrl-C caught"; killall yt-dlp; exit 1' SIGINT
-yt_command=$(command -v /usr/bin/yt-dlp)
 
-#cookies="$HOME/.cache/cookies.txt"
-max_workers=5
-workers=0
+echo "<<PID $$ started>> [Main Process]"
 
-main_pid=$(cut -d' ' -f4 < /proc/self/stat)
-echo "<<PID $main_pid started>> [Main Process]"
 while [ $# -gt 0 ]
 do
     url="$1"
     opts="--no-progress"
+
+    # Spawn a background process to download the URL.
+    # Keep track of each PID in a list. Spaces will be the delimiter.
+    $yt_command $opts "$url" &
+    echo "<<PID $! started>>"
+    [ -z "${pids+x}" ] && pids="$!" || pids="$pids $!"
 
     # Save only YouTube URLs into a list so they will be marked as played.
     # Before the first URL to be saved, the list is not initialiazed. Just
@@ -23,18 +26,8 @@ do
         [ -z "${to_mark+x}" ] && to_mark="$url" || to_mark=$(printf "%s\n%s" "$to_mark" "$url")
     fi
 
-    # Spawn a background process to download the URL. Increment workers
-    # variable. If $workers is greater than $max_workers, wait for one of the
-    # child processes to finish and then decrement workers.
-    (pid=$(cut -d' ' -f4 < /proc/self/stat) && echo "<<PID $pid started>>" && \
-        $yt_command $opts "$url" && echo "<<PID $pid completed>>") &
+    # Next argument will have the next link.
     shift
-    workers=$((workers + 1))
-    if [ $workers -gt $max_workers ]
-    then
-        wait -n
-        workers=$((workers - 1))
-    fi
     sleep 1
 done
 
@@ -45,5 +38,12 @@ done
     xargs -0 $yt_command --simulate --cookies "$cookies" --mark-watched
 
 # Don't forget to wait for any remaining downloads to complete.
-echo "<<PID $main_pid completed>> [Main Process]"
-wait
+echo "<<PID $$ cleaning up>> [Main Process]"
+for pid in $pids
+do
+    if wait "$pid"; then
+        echo "<<PID $pid exited normally>>"
+    else
+        echo "<<PID $pid exited with errors>>"
+    fi
+done
