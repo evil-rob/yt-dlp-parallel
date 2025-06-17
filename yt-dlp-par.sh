@@ -21,7 +21,7 @@ do
     # Before the first URL to be saved, the list is not initialiazed. Just
     # copy $url into to_mark. Subsequent URLs will be added to the list
     # following a newline.
-    if [ -v "cookies" -a -z "${url##*youtube*}" ]
+    if [ -n "${cookies+x}" -a -z "${url##*youtube*}" ]
     then
         [ -z "${to_mark+x}" ] && to_mark="$url" || to_mark=$(printf "%s\n%s" "$to_mark" "$url")
     fi
