@@ -1,11 +1,12 @@
 #!/bin/sh
 
+name=$(basename "$0")
 yt_command="/usr/bin/yt-dlp"
 max_jobs="4"
 
 trap 'echo "Ctrl-C caught"; killall yt-dlp; exit 1' SIGINT
 
-echo "<<PID $$ started>> [Main Process]"
+echo "[$name]: PID $$ started"
 
 for url in "$@"
 do
@@ -14,7 +15,7 @@ do
     # Spawn a background process to download the URL.
     # Keep track of each PID in a list. Spaces will be the delimiter.
     $yt_command $opts "$url" &
-    echo "<<PID $! started>>"
+    echo "[$name]: PID $! started"
     pids="$pids $!"
 
     # Save only YouTube URLs into a list so they will be marked as played.
@@ -41,9 +42,9 @@ do
                 # Wait on the PID that terminated
                 if wait "$pid"
                 then
-                    echo "[$0] $pid exited normally."
+                    echo "[$name] $pid exited normally"
                 else
-                    echo "[$0] $pid exited with errors."
+                    echo "[$name] $pid exited with errors"
                 fi
 
                 # Remove PID from the PIDs list by iterating through the old
@@ -67,12 +68,12 @@ done
     xargs -0 $yt_command --simulate --cookies "$cookies" --mark-watched
 
 # Don't forget to wait for any remaining downloads to complete.
-echo "<<PID $$ cleaning up>> [Main Process]"
+echo "[$name]: PID $$ cleaning up"
 for pid in $pids
 do
     if wait "$pid"; then
-        echo "<<PID $pid exited normally>>"
+        echo "[$name]: PID $pid exited normally"
     else
-        echo "<<PID $pid exited with errors>>"
+        echo "[$name]: PID $pid exited with errors"
     fi
 done
