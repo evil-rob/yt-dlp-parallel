@@ -1,11 +1,11 @@
 #!/bin/sh
 
+set -eu
 name=$(basename "$0")
-#yt_command="/usr/bin/yt-dlp"
-yt_command="$(which yt-dlp)"
+yt_command="$(command -v yt-dlp)"
 max_jobs="4"
 
-trap 'echo "Ctrl-C caught"; killall yt-dlp; exit 1' SIGINT
+trap 'echo "Ctrl-C caught"; for pid in $pids; do kill "$pid"; done; exit 1' SIGINT
 
 wait_for_worker()
 {
@@ -84,6 +84,8 @@ get_query_param()
     # $1 - URL
     # $2 - key
 
+    found_key=0
+
     # Save the current IFS
     old_IFS="$IFS"
 
@@ -115,13 +117,9 @@ get_query_param()
         fi
 
         # --- Basic URL Decoding (still the same limitations as before) ---
-        # Decode + to space
-        key="${key//+/ }"
-        value="${value//+/ }"
-
-        # Decode %20 to space
-        key="${key//%20/ }"
-        value="${value//%20/ }"
+        # Decode + and %20 to space
+        key=$(echo "$key" | sed 's/+/ /g; s/%20/ /g')
+        value=$(echo "$value" | sed 's/+/ /g; s/%20/ /g')
 
         if [ "$key" = "$2" ]
         then
@@ -132,7 +130,7 @@ get_query_param()
     done
 
     # Restore original IFS before function exit
-    IFS="$IFS_backup"
+    IFS="$old_IFS"
 
     # --- Return the negated flag's logical value as exit status ---
     # If found_key is 0 (not found), [ "$found_key" -eq 0 ] is true (exit 0).
