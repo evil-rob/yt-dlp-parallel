@@ -4,49 +4,78 @@ set -eu
 name=$(basename "$0")
 yt_command="$(command -v yt-dlp)"
 max_jobs="4"
+opts="--no-progress"
+pids=""
+to_mark=""
 
 trap 'echo "Ctrl-C caught"; for pid in $pids; do kill "$pid"; done; exit 1' SIGINT
 
-wait_for_worker()
+# Sit in a while loop and poll each PID. For each completed PID, add to a list
+# of completed PIDs and remove it from the argument list. Break out of the loop
+# either if there are fewer than $max_jobs active PIDs or if there are more
+# than $max_jobs completed PIDs. Print the list of completed PIDs.
+poll_workers()
 {
-    # Sit in the while loop when there are $max_jobs PIDs running. Keep
-    # polling the PIDs list and wait on each PID that terminates. Use kill -0
-    # to check if a PID has terminated. After waiting on a PID, remove it from
-    # the PIDs list.
-    while [ "$#" -ge "$max_jobs" ]
+    completed_jobs=""
+    while :
     do
-        # Poll each PID
-        for pid in "$@"
+        new_args=""
+        for arg
         do
-            # Check if PID has terminated
-            if ! kill -0 "$pid" 2>/dev/null
-            then 
-                # Wait on the PID that terminated
-                wait "$pid"
+            if ! ps -p "$arg" >/dev/null 2>&1
+            then
+                if [ -z "$completed_jobs" ]
+                then
+                    completed_jobs="$arg"
+                else
+                    completed_jobs="$completed_jobs $arg"
+                fi
+                continue
+            fi
 
-                # Remove PID from the PIDs list by iterating through the old
-                # list and skipping over the one that terminated.
-                new_pids=""
-                for p in "$@"
-                do
-                    if [ "$p" != "$pid" ]
-                    then
-                        if [ -z "$new_pids" ]
-                        then
-                            new_pids="$p"
-                        else
-                            new_pids="$new_pids $p"
-                        fi
-                    fi
-                done
-                set -- $new_pids
+            if [ -z "$new_args" ]
+            then
+                new_args="$arg"
+            else
+                new_args="$new_args $arg"
             fi
         done
+        
+        set -- $new_args
+
+        [ "$#" -le "$max_jobs" ] && break
         sleep 1
     done
+    echo $completed_jobs
+    return
+}
 
-    # Print current PIDs list.
-    echo "$@"
+# Iterate over positional arguments and call wait
+# on each one. Remove each $arg from the $pids list.
+wait_on()
+{
+    for arg
+    do
+        echo "Waiting for PID $arg"
+        if wait "$arg"
+        then
+            echo "PID $arg completed normally."
+        else
+            echo "PID $arg completed with errors."
+        fi
+        new_pids=""
+        for p in $pids
+        do
+            [ "$arg" = "$p" ] && continue
+            if [ -z "$new_pids" ]
+            then
+                new_pids="$p"
+            else
+                new_pids="$new_pids $p"
+            fi
+        done
+        pids="$new_pids"
+    done
     return 0
 }
 
@@ -54,21 +83,35 @@ launch_workers()
 {
     # Spawn a background process to download each URL.
     # Keep track of each PID in a list. Spaces will be the delimiter.
-    for u in "$@"
+    for arg
     do
-        $yt_command $opts "$u" &
-        [ -z "${pids+x}" ] && pids="$!" || pids="$pids $!"
+        $yt_command $opts "$arg" &
+        #sleep $(( $(od -An -N2 -i /dev/urandom) % 10 + 20)) &
+        if [ -z "$pids" ]
+        then
+            pids="$!"
+        else
+            pids="$pids $!"
+        fi
 
         # Save only YouTube URLs into a list so they will be marked as played.
         # Before the first URL to be saved, the list is not initialiazed. Just
         # copy $url into to_mark. Subsequent URLs will be added to the list
         # following a newline.
-        if [ -n "${cookies+x}" -a -z "${u##*youtube*}" ]
+        if [ -n "${cookies+x}" -a -z "${arg##*youtube*}" ]
         then
-            [ -z "${to_mark+x}" ] && to_mark="$u" || to_mark=$(printf "%s\n%s" "$to_mark" "$u")
+            if [ -z "$to_mark" ]
+            then
+                to_mark="$arg"
+            else
+                to_mark="$to_mark
+$arg"
+            fi
         fi
 
-        pids="$(wait_for_worker $pids)"
+        pids_to_wait_on="$(poll_workers $pids)" 
+        [ -n "$pids_to_wait_on" ] && wait_on $pids_to_wait_on
+
     done
     return 0
 }
@@ -79,6 +122,8 @@ get_query_param()
     then
         quiet=1
         shift
+    else
+        quiet=0
     fi
 
     # $1 - URL
@@ -161,8 +206,6 @@ get_playlist()
 
 while read -r url
 do
-    opts="--no-progress"
-
     # Check for playlist. If the URL is for a playlist then retrieve it.
     if get_query_param -q "$url" "list"
     then
@@ -173,7 +216,13 @@ do
 done
 
 # Mark all URLs in $to_mark as watched. Each URL in the list is on a line.
-# Convert newlines to nulls and iterate through the list using xargs.
 [ -n "$to_mark" ] && $yt_command --simulate --cookies "$cookies" --mark-watched $to_mark
 
-wait
+# Wait on remaining jobs.
+while [ -n "$pids" ]
+do
+    pids_to_wait_on="$(poll_workers $pids)"
+    [ -n "$pids_to_wait_on" ] && wait_on $pids_to_wait_on
+    sleep 1
+done
+echo done.
