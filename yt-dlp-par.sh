@@ -14,9 +14,9 @@ trap 'echo "Ctrl-C caught"; for pid in $pids; do kill "$pid"; done; exit 1' SIGI
 # of completed PIDs and remove it from the argument list. Break out of the loop
 # either if there are fewer than $max_jobs active PIDs or if there are more
 # than $max_jobs completed PIDs. Print the list of completed PIDs.
-poll_workers()
+get_completed_pids()
 {
-    completed_jobs=""
+    completed_pids=""
     while :
     do
         new_args=""
@@ -24,11 +24,11 @@ poll_workers()
         do
             if ! ps -p "$arg" >/dev/null 2>&1
             then
-                if [ -z "$completed_jobs" ]
+                if [ -z "$completed_pids" ]
                 then
-                    completed_jobs="$arg"
+                    completed_pids="$arg"
                 else
-                    completed_jobs="$completed_jobs $arg"
+                    completed_pids="$completed_pids $arg"
                 fi
                 continue
             fi
@@ -43,10 +43,10 @@ poll_workers()
         
         set -- $new_args
 
-        [ "$#" -le "$max_jobs" ] && break
+        [ "$#" -lt "$max_jobs" ] && break
         sleep 1
     done
-    echo $completed_jobs
+    [ -n "$completed_pids" ] && echo $completed_pids
     return
 }
 
@@ -56,7 +56,6 @@ wait_on()
 {
     for arg
     do
-        echo "Waiting for PID $arg"
         if wait "$arg"
         then
             echo "PID $arg completed normally."
@@ -86,7 +85,6 @@ launch_workers()
     for arg
     do
         $yt_command $opts "$arg" &
-        #sleep $(( $(od -An -N2 -i /dev/urandom) % 10 + 20)) &
         if [ -z "$pids" ]
         then
             pids="$!"
@@ -109,8 +107,9 @@ $arg"
             fi
         fi
 
-        pids_to_wait_on="$(poll_workers $pids)" 
-        [ -n "$pids_to_wait_on" ] && wait_on $pids_to_wait_on
+        # get_completed_pids() will return false if there are no completed PIDs
+        pids_to_wait_on="$(get_completed_pids $pids)" && \
+            wait_on $pids_to_wait_on
 
     done
     return 0
@@ -192,16 +191,13 @@ get_playlist()
     # If the playlist is the YouTube Watch Later list, then cookies must
     # are required to retrieve the playlist.
 
-    old_opts="$opts"
-    opts="--simulate --flat-playlist --print %(url)s"
+    playlist_opts="--simulate --flat-playlist --print %(url)s"
     [ -z "${1##*youtube*}" -a "$(get_query_param "$1" "list")" = "WL" ] && \
-        opts="$opts --cookies $cookies"
+        playlist_opts="$playlist_opts --cookies $cookies"
 
-    $yt_command $opts "$1"
-    ret="$?"
+    $yt_command $playlist_opts "$1"
 
-    opts="$old_opts"
-    return "$ret"
+    return
 }
 
 while read -r url
@@ -216,13 +212,17 @@ do
 done
 
 # Mark all URLs in $to_mark as watched. Each URL in the list is on a line.
-[ -n "$to_mark" ] && $yt_command --simulate --cookies "$cookies" --mark-watched $to_mark
+if [ -n "$to_mark" ]
+then
+    $yt_command --simulate --cookies "$cookies" --mark-watched $to_mark &
+    if [ -z "$pids" ]; then pids="$!"; else pids="$pids $!"; fi
+fi
 
 # Wait on remaining jobs.
 while [ -n "$pids" ]
 do
-    pids_to_wait_on="$(poll_workers $pids)"
-    [ -n "$pids_to_wait_on" ] && wait_on $pids_to_wait_on
+    pids_to_wait_on="$(get_completed_pids $pids)" && \
+        wait_on $pids_to_wait_on
     sleep 1
 done
 echo done.
