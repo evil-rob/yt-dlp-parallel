@@ -4,11 +4,12 @@ set -eu
 name=$(basename "$0")
 yt_command="$(command -v yt-dlp)"
 max_jobs="4"
-opts="--no-progress"
+opts="--newline --progress --quiet"
+fifo_path="$(mktemp -u "/tmp/yt-dlp_progress_XXXXXX")"
 pids=""
 to_mark=""
 
-trap 'echo "Ctrl-C caught"; for pid in $pids; do kill "$pid"; done; exit 1' SIGINT
+trap 'echo "Ctrl-C caught"; for pid in $pids; do kill "$pid"; done; exit 1' INT
 
 # Sit in a while loop and poll each PID. For each completed PID, add to a list
 # of completed PIDs and remove it from the argument list. Break out of the loop
@@ -84,7 +85,20 @@ launch_workers()
     # Keep track of each PID in a list. Spaces will be the delimiter.
     for arg
     do
-        $yt_command $opts "$arg" &
+        sh -c '
+job_pid="$$"
+fifo="$3/yt-dlp_progress_$job_pid"
+trap '\''rm -f "$fifo"'\'' EXIT
+mkfifo "$fifo" || \
+    {
+        echo "ERROR: Failed to create FIFO $fifo_path" >&2
+        exit 1
+    }
+echo "$2 download started."
+"$0" $1 "$2" > "$fifo" 2>&1
+echo "$arg download completed."
+' "$yt_command" "$opts" "$arg" "$fifo_path" &
+
         if [ -z "$pids" ]
         then
             pids="$!"
@@ -200,6 +214,8 @@ get_playlist()
     return
 }
 
+mkdir "$fifo_path"
+
 while read -r url
 do
     # Check for playlist. If the URL is for a playlist then retrieve it.
@@ -225,4 +241,5 @@ do
         wait_on $pids_to_wait_on
     sleep 1
 done
+rmdir "$fifo_path"
 echo done.
