@@ -4,8 +4,8 @@ set -eu
 name=$(basename "$0")
 yt_command="$(command -v yt-dlp)"
 max_jobs="4"
-opts="--newline --progress --quiet"
-fifo_path="$(mktemp -u "/tmp/yt-dlp_progress_XXXXXX")"
+opts="--newline"
+fifo_path="$(mktemp -u "/tmp/${name}_XXXXXX")"
 pids=""
 to_mark=""
 
@@ -79,25 +79,28 @@ wait_on()
     return 0
 }
 
+# Fifo name is calculated from SHA-1 of the URL in $1 and encoded as base32.
+get_fifo_name()
+{
+    echo -n "$1" | sed -r 's/https?:\/\///' | sha1sum | xxd -p -r | base32
+}
+
 launch_workers()
 {
     # Spawn a background process to download each URL.
     # Keep track of each PID in a list. Spaces will be the delimiter.
     for arg
     do
-        sh -c '
-job_pid="$$"
-fifo="$3/yt-dlp_progress_$job_pid"
-trap '\''rm -f "$fifo"'\'' EXIT
-mkfifo "$fifo" || \
-    {
-        echo "ERROR: Failed to create FIFO $fifo_path" >&2
-        exit 1
-    }
-echo "$2 download started."
-"$0" $1 "$2" > "$fifo" 2>&1
-echo "$arg download completed."
-' "$yt_command" "$opts" "$arg" "$fifo_path" &
+        fifo="$fifo_path/$(get_fifo_name "$arg")"
+        (
+            trap "rm -f $fifo" EXIT
+            mkfifo "$fifo" || \
+                {
+                    echo "Failed to create FIFO for $arg" >&2
+                    exit 1
+                }
+            "$yt_command" $opts "$arg" > "$fifo" 2>&1
+        ) &
 
         if [ -z "$pids" ]
         then
@@ -120,6 +123,17 @@ echo "$arg download completed."
 $arg"
             fi
         fi
+
+        (
+            while [ ! -p "$fifo" ]
+            do
+                sleep 1
+            done
+            while read -r line;
+            do
+                echo "[$arg] $line"
+            done < "$fifo"
+        ) &
 
         # get_completed_pids() will return false if there are no completed PIDs
         pids_to_wait_on="$(get_completed_pids $pids)" && \
@@ -209,7 +223,7 @@ get_playlist()
     [ -z "${1##*youtube*}" -a "$(get_query_param "$1" "list")" = "WL" ] && \
         playlist_opts="$playlist_opts --cookies $cookies"
 
-    $yt_command $playlist_opts "$1"
+    "$yt_command" $playlist_opts "$1"
 
     return
 }
@@ -241,5 +255,9 @@ do
         wait_on $pids_to_wait_on
     sleep 1
 done
+
+# Wait on output PIDs.
+wait
+
 rmdir "$fifo_path"
 echo done.
