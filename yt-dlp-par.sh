@@ -99,6 +99,10 @@ launch_workers()
                     echo "Failed to create FIFO for $arg" >&2
                     exit 1
                 }
+            while read -r line;
+            do
+                echo "[$arg] $line"
+            done < "$fifo" &
             "$yt_command" $opts "$arg" > "$fifo" 2>&1
         ) &
 
@@ -123,17 +127,6 @@ launch_workers()
 $arg"
             fi
         fi
-
-        (
-            while [ ! -p "$fifo" ]
-            do
-                sleep 1
-            done
-            while read -r line;
-            do
-                echo "[$arg] $line"
-            done < "$fifo"
-        ) &
 
         # get_completed_pids() will return false if there are no completed PIDs
         pids_to_wait_on="$(get_completed_pids $pids)" && \
@@ -255,9 +248,6 @@ do
         wait_on $pids_to_wait_on
     sleep 1
 done
-
-# Wait on output PIDs.
-wait
 
 rmdir "$fifo_path"
 echo done.
