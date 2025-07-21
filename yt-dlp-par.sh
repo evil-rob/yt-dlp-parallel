@@ -6,10 +6,26 @@ yt_command="$(command -v yt-dlp)"
 max_jobs="4"
 opts="--newline"
 fifo_path="$(mktemp -u "/tmp/${name}_XXXXXX")"
+worker="$((max_jobs-1))"
+lines="$(tput lines)"
+columns="$(tput cols)"
+gauge_size="$((columns*2/3-4))"
+save_cursor="$(tput sc)"
+restore_cursor="$(tput rc)"
+cr="$(tput cr)"
+cursor_to_eol="$(tput hpa "$columns")"
+clear_line="$(printf "\e[2K")"
 pids=""
 to_mark=""
 
 trap 'echo "Ctrl-C caught"; for pid in $pids; do kill "$pid"; done; exit 1' INT
+
+setup_terminal()
+{
+    tput smcup
+    tput csr "$max_jobs" "$((lines-1))"
+    tput vpa "$max_jobs"
+}
 
 # Sit in a while loop and poll each PID. For each completed PID, add to a list
 # of completed PIDs and remove it from the argument list. Break out of the loop
@@ -79,6 +95,90 @@ wait_on()
     return 0
 }
 
+# draw_gauge - Draw a horizontal percentage gauge
+# Usage: draw_gauge <percentage> <width> [filled_char] [empty_char]
+# $1: percentage (0.0 to 100.0)
+# $2: width in characters
+# $3: filled character (default: █)
+# $4: empty character (default: ░)
+
+draw_gauge()
+{
+    # Validate required parameters
+    if [ $# -lt 2 ]; then
+        echo "Usage: draw_gauge <percentage> <width> [filled_char] [empty_char]" >&2
+        return 1
+    fi
+    
+    # Get parameters with defaults
+    percentage="$1"
+    width="$2"
+    filled_char="${3:-█}"
+    empty_char="${4:-░}"
+    
+    # Validate percentage range (0.0 to 100.0)
+    # Using awk for floating point comparison since POSIX sh doesn't support it natively
+    if ! echo "$percentage" | awk '{ exit !($1 >= 0 && $1 <= 100) }'; then
+        echo "Error: percentage must be between 0.0 and 100.0" >&2
+        return 1
+    fi
+    
+    # Validate width is positive integer
+    case "$width" in
+        ''|*[!0-9]*) 
+            echo "Error: width must be a positive integer" >&2
+            return 1
+            ;;
+        *)
+            if [ "$width" -le 0 ]; then
+                echo "Error: width must be greater than 0" >&2
+                return 1
+            fi
+            ;;
+    esac
+    
+    # Calculate filled positions using awk for floating point arithmetic
+    # Multiply percentage by width and divide by 100, then round to nearest integer
+    filled_count=$(echo "$percentage $width" | awk '{ 
+        result = ($1 * $2) / 100 + 0.5
+        printf "%.0f", result
+    }')
+    
+    # Ensure filled_count doesn't exceed width
+    if [ "$filled_count" -gt "$width" ]; then
+        filled_count="$width"
+    fi
+    
+    # Calculate empty positions
+    empty_count=$((width - filled_count))
+    
+    # Build the gauge string
+    gauge=""
+    
+    # Add filled characters
+    i=0
+    while [ "$i" -lt "$filled_count" ]; do
+        gauge="${gauge}${filled_char}"
+        i=$((i + 1))
+    done
+    
+    # Add empty characters
+    i=0
+    while [ "$i" -lt "$empty_count" ]; do
+        gauge="${gauge}${empty_char}"
+        i=$((i + 1))
+    done
+    
+    # Output the gauge
+    echo "$gauge"
+}
+
+# Example usage (uncomment to test):
+# draw_gauge 25.5 20          # 25.5% with default characters
+# draw_gauge 75.0 30 "#" " "  # 75% with # for filled and space for empty  
+# draw_gauge 100.0 15 "=" "." # 100% with block characters
+# draw_gauge 0.0 10           # 0% gauge
+
 # Fifo name is calculated from SHA-1 of the URL in $1 and encoded as base32.
 get_fifo_name()
 {
@@ -91,6 +191,9 @@ launch_workers()
     # Keep track of each PID in a list. Spaces will be the delimiter.
     for arg
     do
+        worker="$(( (worker+1) % 4 ))"
+        vpa="$(tput vpa "$worker")"
+        cuf="$(tput cuf "$((columns/3))")"
         fifo="$fifo_path/$(get_fifo_name "$arg")"
         (
             trap "rm -f $fifo" EXIT
@@ -99,9 +202,25 @@ launch_workers()
                     echo "Failed to create FIFO for $arg" >&2
                     exit 1
                 }
+            filename="unknown"
+            echo -n "${save_cursor}${vpa}${clear_line}${filename}${cr}${cuf}Downloaded:  Size: ${restore_cursor}"
             while read -r line;
             do
-                echo "[$arg] $line"
+                if [ "${line%% *}" = "[download]" ]
+                then
+                    set -- $line
+                    if [ "$#" -eq "3" ]
+                    then
+                        echo "[$arg] $line"
+                        filename="$(basename "$3")"
+                        #shortened="$(echo "$filename" | cut -c1-$((columns/3)))"
+                        echo -n "${save_cursor}${vpa}${filename}[$cursor_to_eol]${restore_cursor}"
+                    else
+                        echo -n "${save_cursor}${vpa}${filename}${cr}${cuf}$(draw_gauge "${2%\%}" "$gauge_size")${restore_cursor}"
+                    fi
+                else
+                    echo "[$arg] $line"
+                fi
             done < "$fifo" &
             "$yt_command" $opts "$arg" > "$fifo" 2>&1
         ) &
@@ -131,7 +250,6 @@ $arg"
         # get_completed_pids() will return false if there are no completed PIDs
         pids_to_wait_on="$(get_completed_pids $pids)" && \
             wait_on $pids_to_wait_on
-
     done
     return 0
 }
@@ -221,6 +339,7 @@ get_playlist()
     return
 }
 
+setup_terminal
 mkdir "$fifo_path"
 
 while read -r url
@@ -235,11 +354,11 @@ do
 done
 
 # Mark all URLs in $to_mark as watched. Each URL in the list is on a line.
-if [ -n "$to_mark" ]
-then
-    $yt_command --simulate --cookies "$cookies" --mark-watched $to_mark &
-    if [ -z "$pids" ]; then pids="$!"; else pids="$pids $!"; fi
-fi
+#if [ -n "$to_mark" ]
+#then
+#    $yt_command --simulate --cookies "$cookies" --mark-watched $to_mark &
+#    if [ -z "$pids" ]; then pids="$!"; else pids="$pids $!"; fi
+#fi
 
 # Wait on remaining jobs.
 while [ -n "$pids" ]
@@ -250,4 +369,8 @@ do
 done
 
 rmdir "$fifo_path"
+#echo -n "$save_cursor"
+#tput csr 0 "$lines"
+#echo -n "$restore_cursor"
+tput rmcup
 echo done.
