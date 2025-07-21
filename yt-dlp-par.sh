@@ -354,11 +354,11 @@ do
 done
 
 # Mark all URLs in $to_mark as watched. Each URL in the list is on a line.
-#if [ -n "$to_mark" ]
-#then
-#    $yt_command --simulate --cookies "$cookies" --mark-watched $to_mark &
-#    if [ -z "$pids" ]; then pids="$!"; else pids="$pids $!"; fi
-#fi
+if [ -n "$to_mark" ]
+then
+    $yt_command --simulate --cookies "$cookies" --mark-watched $to_mark &
+    if [ -z "$pids" ]; then pids="$!"; else pids="$pids $!"; fi
+fi
 
 # Wait on remaining jobs.
 while [ -n "$pids" ]
