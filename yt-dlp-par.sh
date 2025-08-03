@@ -354,11 +354,8 @@ do
 done
 
 # Mark all URLs in $to_mark as watched. Each URL in the list is on a line.
-if [ -n "$to_mark" ]
-then
+[ -n "$to_mark" ] && \
     $yt_command --simulate --cookies "$cookies" --mark-watched $to_mark &
-    if [ -z "$pids" ]; then pids="$!"; else pids="$pids $!"; fi
-fi
 
 # Wait on remaining jobs.
 while [ -n "$pids" ]
@@ -368,9 +365,14 @@ do
     sleep 1
 done
 
+# Restore scroll
+echo -n "$save_cursor"
+tput csr 0 "$lines"
+echo -n "$restore_cursor"
+
+# Wait for mark watched
+wait
+
 rmdir "$fifo_path"
-#echo -n "$save_cursor"
-#tput csr 0 "$lines"
-#echo -n "$restore_cursor"
 tput rmcup
 echo done.
