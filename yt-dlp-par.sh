@@ -10,8 +10,6 @@ worker=$((max_jobs-1))
 lines=$(tput lines)
 columns=$(tput cols)
 gauge_size=$((columns*2/3-4))
-save_cursor=$(tput sc)
-restore_cursor=$(tput rc)
 bar_location=$(tput hpa "$((columns-gauge_size))")
 cursor_to_eol=$(tput hpa "$columns")
 bottom=$(tput cup "$lines" 0)
@@ -19,7 +17,16 @@ clear_line="$(printf "\033[2K")"
 pids=""
 to_mark=""
 
-trap 'echo "Ctrl-C caught"; for pid in $pids; do kill "$pid"; done; exit 130' INT
+trap 'SIGINT_handler' INT
+SIGINT_handler()
+{
+  printf '\033[r%s%s\n' "$bottom" "Ctrl-C caught"
+  for pid in $pids
+  do
+    kill "$pid"
+  done
+  exit 130
+}
 
 setup_terminal()
 {
@@ -173,7 +180,7 @@ draw_gauge()
   done
   
   # Output the gauge
-  echo -n "$save_cursor[$gauge]$restore_cursor"
+  echo -n "[$gauge]"
 }
 
 # Example usage (uncomment to test):
@@ -243,7 +250,9 @@ launch_workers()
     vpa="$(tput vpa "$worker")"
     fifo="$fifo_path/$(get_fifo_name "$url")"
     (
-      trap "rm -f $fifo" EXIT
+      trap '[ -p "$fifo" ] && rm -f "$fifo"' EXIT
+      trap 'echo "[$url] SIGTERM received."; kill $reader_pid $yt_pid; exit 1' TERM
+
       mkfifo "$fifo" || \
         {
           echo "Failed to create FIFO for $url" >&2
@@ -278,7 +287,10 @@ launch_workers()
           echo "[$url] $line"
         fi
       done < "$fifo" &
-      "$yt_command" $opts "$url" > "$fifo" 2>&1
+      reader_pid=$!
+      "$yt_command" $opts "$url" > "$fifo" 2>&1 &
+      yt_pid=$!
+      wait
     ) &
 
     if [ -z "$pids" ]
@@ -402,6 +414,19 @@ get_playlist()
   return
 }
 
+trap 'clean_up' EXIT
+clean_up()
+{
+  echo "[$name] Cleaning up."
+  while [ -d "$fifo_path" ] && ! rmdir "$fifo_path" 2>/dev/null
+  do
+    echo "[clean_up] Failed to remove $fifo_path" >&2
+    echo "[clean_up] Retrying." >&2
+    sleep 1
+  done
+  echo "[$name] Done."
+}
+
 setup_terminal
 
 mkdir "$fifo_path"
@@ -430,10 +455,7 @@ do
   sleep 1
 done
 
-# Restore scroll
-printf "${save_cursor}\033[r${restore_cursor}"
+printf "\033[r$bottom"
 
 # Wait for mark watched
 wait
-
-rmdir "$fifo_path"
