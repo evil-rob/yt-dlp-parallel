@@ -24,11 +24,7 @@ trap 'echo "Ctrl-C caught"; for pid in $pids; do kill "$pid"; done; exit 130' IN
 setup_terminal()
 {
   printf '\n%.0s' $(seq 1 $lines)
-  tput home
-  for line in $(seq 1 "$max_jobs")
-  do
-    echo -n "Worker ${line}${bar_location}[$cursor_to_eol]"
-  done
+  tput vpa "$max_jobs"
   printf "█%.0s" $(seq 1 "$columns")
   tput csr "$((max_jobs+1))" "$((lines-1))"
   tput vpa "$((max_jobs+1))"
@@ -262,6 +258,17 @@ launch_workers()
           if [ "$#" -eq "3" ]
           then
             filename="$(basename "$3")"
+            max_len=$((columns-gauge_size-1))
+            start_chars=$((max_len/2))
+            string_len="${#filename}"
+            if [ "$string_len" -gt "$max_len" ]
+            then
+                end_chars=$((max_len - start_chars - 1))
+                end_start=$((string_len - end_chars + 1))
+                start_part=$(printf '%s' "$filename" | cut -c1-"$start_chars")
+                end_part=$(printf '%s' "$filename" | cut -c"$end_start"-"$string_len")
+                filename="$start_part…$end_part"
+            fi
             echo -n "${vpa}${clear_line}${filename}${bottom}"
           else
             progress=$(draw_gauge "${2%\%}" "$gauge_size")
