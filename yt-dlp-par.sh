@@ -3,17 +3,18 @@
 
 set -eu
 name=$(basename "$0")
+name="${name%.*}"
 yt_command=$(command -v yt-dlp)
-max_jobs="4"
+max_jobs="${1:-4}"
 fifo_path=$(mktemp -u "/tmp/${name}_XXXXXX")
 worker=$((max_jobs-1))
 lines=$(tput lines)
 columns=$(tput cols)
 gauge_size=$((columns*2/3-4))
-bar_location=$(tput hpa "$((columns-gauge_size))")
+bar_location=$(tput hpa $((columns-gauge_size)))
 cursor_to_eol=$(tput hpa "$columns")
 bottom=$(tput cup "$lines" 0)
-clear_line="$(printf "\033[2K")"
+clear_line=$(printf "\033[2K")
 pids=""
 to_mark=""
 
@@ -246,7 +247,7 @@ launch_workers()
   # Keep track of each PID in a list. Spaces will be the delimiter.
   for url in $urls
   do
-    worker="$(( (worker+1) % 4 ))"
+    worker="$(( (worker+1) % max_jobs ))"
     vpa="$(tput vpa "$worker")"
     fifo="$fifo_path/$(get_fifo_name "$url")"
     (
@@ -279,6 +280,9 @@ launch_workers()
                 filename="$start_part…$end_part"
             fi
             echo -n "${vpa}${clear_line}${filename}${bottom}"
+          elif [ "$2" = "100%" ]
+          then
+            echo -n "${vpa}${bar_location}[$(((gauge_size-9)/2))CCompleted${bottom}"
           else
             progress=$(draw_gauge "${2%\%}" "$gauge_size")
             echo -n "${vpa}${bar_location}${progress}${bottom}"
