@@ -4,7 +4,7 @@
 set -eu
 name=$(basename "$0")
 name="${name%.*}"
-yt_command=$(command -v yt-dlp)
+yt_command="$HOME/Stuff/build/yt-dlp-par/yt-dlp-sim.sh"
 max_jobs="${1:-4}"
 fifo_path=$(mktemp -u "/tmp/${name}_XXXXXX")
 worker=$((max_jobs-1))
@@ -196,6 +196,93 @@ get_fifo_name()
   echo -n "$1" | sed -r 's/https?:\/\///' | sha1sum | xxd -p -r | base32
 }
 
+# Condense a long string to fit a fixed column
+# width and not overflow into the progress gauge.
+condense_string()
+{
+  max_len=$((columns-gauge_size-1))
+  start_chars=$((max_len/2))
+  string_len="${#1}"
+  if [ "$string_len" -gt "$max_len" ]
+  then
+    end_chars=$((max_len - start_chars - 1))
+    end_start=$((string_len - end_chars + 1))
+    start_part=$(printf '%s' "$1" | cut -c1-"$start_chars")
+    end_part=$(printf '%s' "$1" | cut -c"$end_start"-"$string_len")
+    echo "$start_part…$end_part"
+  fi
+}
+
+handle_preproc_msg()
+{
+  #echo "${status_line}${bar_location}[$(((gauge_size-16)/2))C Pre-pcocessing ${bottom}[$url]${*}"
+  echo "[$url] $*"
+}
+
+handle_download_msg()
+{
+  if [ "$2" = "Destination:" ]
+  then
+    filename=$(basename "$3")
+    condensed=$(condense_string "$filename")
+    echo "[$url] $condensed"
+    echo "[$url] $filename"
+    sleep 5
+    echo -n "${status_line}${clear_line}${filename}${bottom}"
+  elif [ "$2" = "100%" ]
+  then
+    echo -n "${status_line}${bar_location}[$(((gauge_size-11)/2))C Completed ${bottom}"
+  else
+    progress=$(draw_gauge "${2%\%}" "$gauge_size")
+    echo -n "${status_line}${bar_location}${progress}${bottom}"
+  fi
+}
+
+handle_postproc_msg()
+{
+  #echo "${status_line}${bar_location}[$(((gauge_size-17)/2))C Post-pcocessing ${bottom}[$url]${*}"
+  echo "[$url] $*"
+}
+
+# Setup the fifo for status messages and initiate the download.
+download()
+{
+  trap '[ -p "$fifo" ] && rm -f "$fifo"' EXIT
+  trap 'echo "[$url] SIGTERM received."; kill $reader_pid $yt_pid; exit 1' TERM
+  
+  url="$1"
+  status_line="$2"
+  fifo="$3"
+
+  mkfifo "$fifo" || \
+    {
+      echo "Failed to create FIFO for $url" >&2
+      exit 1
+    }
+  echo -n "${status_line}${clear_line}${url}${bar_location}${empty_gauge}${bottom}"
+  while read -r line
+  do
+    case "$line" in
+      \[youtube\]*|\[info\]*|\[lbry\]*)
+        handle_preproc_msg $line
+        ;;
+      \[download\]*)
+        handle_download_msg $line
+        ;;
+      \[ThumbnailsConvertor\]*|\[Merger\]*|\[Metadata\])
+        handle_postproc_msg $line
+        ;;
+      *)
+        echo "[$url] $line"
+        ;;
+    esac
+  done < "$fifo" &
+  reader_pid=$!
+  "$yt_command" $opts "$url" > "$fifo" 2>&1 &
+  yt_pid=$!
+  wait
+}
+
 launch_workers()
 {
   opts="--ignore-config
@@ -213,7 +300,7 @@ launch_workers()
   while [ $# -gt 0 ]
   do
     case "$1" in
-      http://*|https://*)
+      http:*|https:*)
         if [ -z "$urls" ]
         then
           urls="$1"
@@ -237,6 +324,7 @@ launch_workers()
       *)
         # Neither an option nor a URL.
         echo "[launch_workers] Invalid parameter: \"$1\"" >&2
+        ;;
     esac
     shift
   done
@@ -247,55 +335,10 @@ launch_workers()
   # Keep track of each PID in a list. Spaces will be the delimiter.
   for url in $urls
   do
-    worker="$(( (worker+1) % max_jobs ))"
-    vpa="$(tput vpa "$worker")"
+    worker=$(( (worker+1) % max_jobs ))
+    vpa=$(tput vpa "$worker")
     fifo="$fifo_path/$(get_fifo_name "$url")"
-    (
-      trap '[ -p "$fifo" ] && rm -f "$fifo"' EXIT
-      trap 'echo "[$url] SIGTERM received."; kill $reader_pid $yt_pid; exit 1' TERM
-
-      mkfifo "$fifo" || \
-        {
-          echo "Failed to create FIFO for $url" >&2
-          exit 1
-        }
-      echo -n "${vpa}${clear_line}${url}${bar_location}${empty_gauge}${bottom}"
-      while read -r line;
-      do
-        if [ "${line%% *}" = "[download]" ]
-        then
-          set -- $line
-          if [ "$#" -eq "3" ]
-          then
-            filename="$(basename "$3")"
-            max_len=$((columns-gauge_size-1))
-            start_chars=$((max_len/2))
-            string_len="${#filename}"
-            if [ "$string_len" -gt "$max_len" ]
-            then
-                end_chars=$((max_len - start_chars - 1))
-                end_start=$((string_len - end_chars + 1))
-                start_part=$(printf '%s' "$filename" | cut -c1-"$start_chars")
-                end_part=$(printf '%s' "$filename" | cut -c"$end_start"-"$string_len")
-                filename="$start_part…$end_part"
-            fi
-            echo -n "${vpa}${clear_line}${filename}${bottom}"
-          elif [ "$2" = "100%" ]
-          then
-            echo -n "${vpa}${bar_location}[$(((gauge_size-9)/2))CCompleted${bottom}"
-          else
-            progress=$(draw_gauge "${2%\%}" "$gauge_size")
-            echo -n "${vpa}${bar_location}${progress}${bottom}"
-          fi
-        else
-          echo "[$url] $line"
-        fi
-      done < "$fifo" &
-      reader_pid=$!
-      "$yt_command" $opts "$url" > "$fifo" 2>&1 &
-      yt_pid=$!
-      wait
-    ) &
+    (download "$url" $(tput vpa "$worker") "$fifo") &
 
     if [ -z "$pids" ]
     then
@@ -448,8 +491,8 @@ do
 done
 
 # Mark all URLs in $to_mark as watched. Each URL in the list is on a line.
-[ -n "$to_mark" ] && \
-  $yt_command --simulate --cookies "$cookies" --mark-watched $to_mark &
+#[ -n "$to_mark" ] && \
+#  $yt_command --simulate --cookies "$cookies" --mark-watched $to_mark &
 
 # Wait on remaining jobs.
 while [ -n "$pids" ]
@@ -462,4 +505,4 @@ done
 printf "\033[r$bottom"
 
 # Wait for mark watched
-wait
+#wait
