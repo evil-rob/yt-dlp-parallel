@@ -2,9 +2,8 @@
 # vim: set tabstop=2 shiftwidth=2 expandtab:
 
 set -eu
-name=$(basename "$0")
-name="${name%.*}"
-yt_command="$HOME/Stuff/build/yt-dlp-par/yt-dlp-sim.sh"
+name=$(basename "$0" | cut -d. -f1)
+yt_command=$(command -v yt-dlp)
 max_jobs="${1:-4}"
 fifo_path=$(mktemp -u "/tmp/${name}_XXXXXX")
 worker=$((max_jobs-1))
@@ -190,12 +189,6 @@ draw_gauge()
 # draw_gauge 100.0 15 "=" "." # 100% with block characters
 # draw_gauge 0.0 10           # 0% gauge
 
-# Fifo name is calculated from SHA-1 of the URL in $1 and encoded as base32.
-get_fifo_name()
-{
-  echo -n "$1" | sed -r 's/https?:\/\///' | sha1sum | xxd -p -r | base32
-}
-
 # Condense a long string to fit a fixed column
 # width and not overflow into the progress gauge.
 condense_string()
@@ -210,6 +203,8 @@ condense_string()
     start_part=$(printf '%s' "$1" | cut -c1-"$start_chars")
     end_part=$(printf '%s' "$1" | cut -c"$end_start"-"$string_len")
     echo "$start_part…$end_part"
+  else
+    echo "$1"
   fi
 }
 
@@ -300,7 +295,7 @@ launch_workers()
   while [ $# -gt 0 ]
   do
     case "$1" in
-      http:*|https:*)
+      http://*|https://*)
         if [ -z "$urls" ]
         then
           urls="$1"
@@ -335,9 +330,10 @@ launch_workers()
   # Keep track of each PID in a list. Spaces will be the delimiter.
   for url in $urls
   do
+    # Fifo name is calculated from SHA-1 of the URL in $1 and encoded as base32.
+    fifo="$fifo_path/$(echo -n "$url" | sed -r 's/https?:\/\///' | sha1sum | xxd -p -r | base32)"
+    
     worker=$(( (worker+1) % max_jobs ))
-    vpa=$(tput vpa "$worker")
-    fifo="$fifo_path/$(get_fifo_name "$url")"
     (download "$url" $(tput vpa "$worker") "$fifo") &
 
     if [ -z "$pids" ]
