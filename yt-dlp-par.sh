@@ -434,10 +434,10 @@ get_query_param()
 get_playlist()
 {
   # $1 - URL
-  # If the playlist is the YouTube Watch Later list, then cookies must
+  # If the playlist is the YouTube Watch Later list, then cookies
   # are required to retrieve the playlist.
 
-  playlist_opts="--skip-download --flat-playlist --print %(url)s"
+  playlist_opts="--skip-download --ignore-config --flat-playlist --print %(url)s"
   [ -z "${1##*youtube*}" -a "$(get_query_param "$1" "list")" = "WL" ] && \
     {
       [ -n "${cookies:+x}" ] || \
@@ -484,7 +484,7 @@ done
 
 # Mark all URLs in $to_mark as watched. Each URL in the list is on a line.
 [ -n "$to_mark" ] && \
-  $yt_command --skip-download --cookies "$cookies" --mark-watched $to_mark &
+  $yt_command --skip-download --ignore-config --cookies "$cookies" --mark-watched $to_mark &
 
 # Wait on remaining jobs.
 while [ -n "$pids" ]
