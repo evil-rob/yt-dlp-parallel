@@ -218,11 +218,7 @@ handle_download_msg()
 {
   if [ "$2" = "Destination:" ]
   then
-    filename=$(basename "$3")
-    condensed=$(condense_string "$filename")
-    echo "[$url] $condensed"
-    echo "[$url] $filename"
-    sleep 5
+    filename=$(condense_string $(basename "$3"))
     echo -n "${status_line}${clear_line}${filename}${bottom}"
   elif [ "$2" = "100%" ]
   then
@@ -441,7 +437,7 @@ get_playlist()
   # If the playlist is the YouTube Watch Later list, then cookies must
   # are required to retrieve the playlist.
 
-  playlist_opts="--simulate --flat-playlist --print %(url)s"
+  playlist_opts="--skip-download --flat-playlist --print %(url)s"
   [ -z "${1##*youtube*}" -a "$(get_query_param "$1" "list")" = "WL" ] && \
     {
       [ -n "${cookies:+x}" ] || \
@@ -487,8 +483,8 @@ do
 done
 
 # Mark all URLs in $to_mark as watched. Each URL in the list is on a line.
-#[ -n "$to_mark" ] && \
-#  $yt_command --simulate --cookies "$cookies" --mark-watched $to_mark &
+[ -n "$to_mark" ] && \
+  $yt_command --skip-download --cookies "$cookies" --mark-watched $to_mark &
 
 # Wait on remaining jobs.
 while [ -n "$pids" ]
@@ -501,4 +497,4 @@ done
 printf "\033[r$bottom"
 
 # Wait for mark watched
-#wait
+wait
