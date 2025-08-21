@@ -216,15 +216,18 @@ handle_preproc_msg()
 
 handle_download_msg()
 {
-  if [ "$2" = "Destination:" ]
+  if [ "$3" = "Destination:" ]
   then
-    filename=$(condense_string $(basename "$3"))
+    filename=$(condense_string $(basename "$4"))
     echo -n "${status_line}${clear_line}${filename}${bottom}"
-  elif [ "$2" = "100%" ]
+  elif [ "$3" = "100%" ]
   then
     echo -n "${status_line}${bar_location}[$(((gauge_size-11)/2))C Completed ${bottom}"
+  elif [ "$3" = "Sleeping" ]
+  then
+    echo "$@"
   else
-    progress=$(draw_gauge "${2%\%}" "$gauge_size")
+    progress=$(draw_gauge "${3%\%}" "$gauge_size")
     echo -n "${status_line}${bar_location}${progress}${bottom}"
   fi
 }
@@ -258,7 +261,7 @@ download()
         handle_preproc_msg $line
         ;;
       \[download\]*)
-        handle_download_msg $line
+        handle_download_msg "[$url]" $line
         ;;
       \[ThumbnailsConvertor\]*|\[Merger\]*|\[Metadata\])
         handle_postproc_msg $line
@@ -357,6 +360,8 @@ $url"
     # get_completed_pids() will return false if there are no completed PIDs
     pids_to_wait_on="$(get_completed_pids $pids)" && \
       wait_on $pids_to_wait_on
+
+    sleep 5
   done
   return 0
 }
